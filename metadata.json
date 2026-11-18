@@ -1,0 +1,6 @@
+{
+  "name": "Women's Health Survey",
+  "description": "An ICT educational research survey on pregnancy, menstrual periods, and spine pain in women, with Google Sheets integration and a secure analytics dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
