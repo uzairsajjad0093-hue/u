@@ -20,9 +20,10 @@ const STORE_PATH = path.resolve(DATA_DIR, 'survey-store.json');
 
 const ADMIN_PASSWORD = 'Uzairsajjad@12';
 
-const SESSION_SECRET =
-  process.env.SESSION_SECRET ||
-  crypto.createHash('sha256').update(`whs:${ADMIN_PASSWORD}`).digest('hex');
+const SESSION_SIGNING_DIGEST = crypto
+  .createHash('sha256')
+  .update(`whs-session-v1:${ADMIN_PASSWORD}`)
+  .digest('hex');
 
 const COOKIE_NAME = 'whs_admin_session';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12; // 12 hours
@@ -160,7 +161,10 @@ function createSessionToken(): string {
       nonce: crypto.randomBytes(8).toString('hex'),
     }),
   ).toString('base64url');
-  const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
+  const sig = crypto
+    .createHmac('sha256', SESSION_SIGNING_DIGEST)
+    .update(payload)
+    .digest('base64url');
   return `${payload}.${sig}`;
 }
 
@@ -170,7 +174,7 @@ function verifySessionToken(token: string | undefined): boolean {
   if (parts.length !== 2) return false;
   const [payload, sig] = parts;
   const expectedSig = crypto
-    .createHmac('sha256', SESSION_SECRET)
+    .createHmac('sha256', SESSION_SIGNING_DIGEST)
     .update(payload)
     .digest('base64url');
 
