@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { safeFetchJson } from './lib/http';
+import { fetchSurveyStatus, submitSurveyResponse } from './lib/surveyApi';
 import { AdminDashboard } from './components/AdminDashboard';
 import { ConfirmationView } from './components/ConfirmationView';
 import { Header, type AppView } from './components/Header';
@@ -17,11 +17,15 @@ interface DraftState {
   activeSectionIndex: number;
 }
 
-function getInitialViewFromPath(): AppView {
+function getInitialViewFromLocation(): AppView {
   if (typeof window !== 'undefined') {
+    const hash = window.location.hash.toLowerCase();
+    if (hash === '#/admin' || hash === '#admin') return 'admin';
+    if (hash === '#/privacy' || hash === '#privacy') return 'privacy';
+
     const p = window.location.pathname.toLowerCase();
-    if (p === '/admin' || p.startsWith('/admin/')) return 'admin';
-    if (p === '/privacy') return 'privacy';
+    if (p.endsWith('/admin') || p.includes('/admin/')) return 'admin';
+    if (p.endsWith('/privacy')) return 'privacy';
   }
   return 'welcome';
 }
@@ -34,7 +38,7 @@ function createSubmissionId(): string {
 }
 
 export default function App() {
-  const [view, setView] = useState<AppView>(getInitialViewFromPath);
+  const [view, setView] = useState<AppView>(getInitialViewFromLocation);
   const [surveyOpen, setSurveyOpen] = useState(true);
 
   const [participantName, setParticipantName] = useState('');
@@ -86,39 +90,45 @@ export default function App() {
     }
   }, [participantName, consent, answers, activeSectionIndex]);
 
-  // Fetch server-configured survey status (open by default)
+  // Fetch survey status (open by default)
   useEffect(() => {
-    safeFetchJson<{ surveyOpen?: boolean }>('/api/status', { cache: 'no-store' })
-      .then((res) => {
-        if (res.ok && res.data && typeof res.data.surveyOpen === 'boolean') {
-          setSurveyOpen(res.data.surveyOpen);
-        }
-      })
-      .catch(() => {
-        // Keep initial surveyOpen = true on transient status fetch issue
-      });
+    fetchSurveyStatus()
+      .then((res) => setSurveyOpen(res.surveyOpen))
+      .catch(() => {});
   }, []);
 
-  // Keep browser URL synced cleanly for /admin and /privacy
+  // Use hash navigation so routes work cleanly on both Node hosting and GitHub Pages subpaths
   function navigateTo(nextView: AppView) {
     setView(nextView);
     setSubmitError('');
     if (typeof window !== 'undefined') {
-      const nextPath =
-        nextView === 'admin' ? '/admin' : nextView === 'privacy' ? '/privacy' : '/';
-      if (window.location.pathname !== nextPath) {
-        window.history.pushState({}, '', nextPath);
+      const nextHash =
+        nextView === 'admin' ? '#/admin' : nextView === 'privacy' ? '#/privacy' : '';
+      if (window.location.hash !== nextHash) {
+        if (nextHash) {
+          window.location.hash = nextHash;
+        } else {
+          window.history.replaceState(
+            null,
+            '',
+            window.location.pathname + window.location.search,
+          );
+        }
       }
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }
 
   useEffect(() => {
-    const onPopState = () => {
-      setView(getInitialViewFromPath());
+    const onHashOrPop = () => {
+      setView(getInitialViewFromLocation());
     };
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
+    window.addEventListener('hashchange', onHashOrPop);
+    window.addEventListener('popstate', onHashOrPop);
+    return () => {
+      window.removeEventListener('hashchange', onHashOrPop);
+      window.removeEventListener('popstate', onHashOrPop);
+    };
   }, []);
 
   const answeredCount = Object.values(answers).filter((v) => Boolean(v && v.trim())).length;
@@ -146,36 +156,17 @@ export default function App() {
     setSubmitError('');
 
     try {
-      const result = await safeFetchJson<{
-        ok?: boolean;
-        message?: string;
-        submissionId?: string;
-        timestamp?: string;
-      }>('/api/responses', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          submissionId: submissionIdRef.current,
-          id: submissionIdRef.current,
-          name: participantName.trim(),
-          consent: true,
-          answers,
-          website: websiteHoneypot,
-        }),
+      const result = await submitSurveyResponse({
+        submissionId: submissionIdRef.current,
+        name: participantName.trim(),
+        consent: true,
+        answers,
+        website: websiteHoneypot,
       });
 
-      if (!result.ok || !result.data?.ok) {
-        throw new Error(
-          result.data?.message ||
-            result.errorMessage ||
-            'Your response could not be saved. Please try again.',
-        );
-      }
-
-      const data = result.data;
       setConfirmation({
-        submissionId: data.submissionId || submissionIdRef.current,
-        submittedAt: data.timestamp || new Date().toISOString(),
+        submissionId: result.submissionId,
+        submittedAt: result.timestamp,
       });
 
       // Reset form state & prepare fresh ID for any future response

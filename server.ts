@@ -2,16 +2,14 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import dotenv from 'dotenv';
 import express from 'express';
+import { INITIAL_CLEAN_RESPONSES } from './src/shared/initialCleanData.ts';
 import {
   ALL_QUESTIONS,
   computeSurveyAnalytics,
   validateSurveyPayload,
   type SurveySubmissionRecord,
 } from './src/shared/surveySchema.ts';
-
-dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -45,7 +43,7 @@ function getDefaultStore(): StoreData {
       surveyOpen: true,
       updatedAt: new Date().toISOString(),
     },
-    responses: [],
+    responses: [...INITIAL_CLEAN_RESPONSES],
   };
 }
 

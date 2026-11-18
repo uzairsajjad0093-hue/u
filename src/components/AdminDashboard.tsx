@@ -13,7 +13,19 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { safeFetchJson } from '../lib/http';
+import {
+  adminLogin,
+  adminLogout,
+  checkAdminSession,
+  clearAllAdminResponses,
+  deleteAdminResponse,
+  exportAdminResponses,
+  fetchAdminOverview,
+  getStoredAdminToken,
+  setStoredAdminToken,
+  toggleAdminSurveyOpen,
+  type OverviewResponse,
+} from '../lib/surveyApi';
 import {
   SURVEY_SECTIONS,
   type QuestionAnalytics,
@@ -21,40 +33,7 @@ import {
   type SurveySubmissionRecord,
 } from '../shared/surveySchema';
 
-interface AdminConfig {
-  surveyOpen: boolean;
-  updatedAt: string;
-}
-
-interface OverviewResponse {
-  ok: boolean;
-  config: AdminConfig;
-  analytics: SurveyAnalyticsReport;
-  responses: SurveySubmissionRecord[];
-}
-
-const ADMIN_TOKEN_STORAGE_KEY = 'whs_admin_token_v1';
 const CHART_PALETTE = ['#775777', '#9b7499', '#be9abc', '#d9bdd8', '#ecdae9'];
-
-function readStoredToken(): string | null {
-  try {
-    return sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function writeStoredToken(token: string | null): void {
-  try {
-    if (token) {
-      sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, token);
-    } else {
-      sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
-    }
-  } catch {
-    // Ignore storage issues
-  }
-}
 
 function SectionOverviewChart({ analytics }: { analytics: SurveyAnalyticsReport }) {
   return (
@@ -239,7 +218,7 @@ export function AdminDashboard({
   const [authState, setAuthState] = useState<'checking' | 'unauthenticated' | 'authenticated'>(
     'checking',
   );
-  const tokenRef = useRef<string | null>(readStoredToken());
+  const tokenRef = useRef<string | null>(getStoredAdminToken());
   const [passwordInput, setPasswordInput] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loginError, setLoginError] = useState('');
@@ -267,87 +246,54 @@ export function AdminDashboard({
   const [confirmClearAll, setConfirmClearAll] = useState(false);
   const [clearingAll, setClearingAll] = useState(false);
 
-  const getAuthHeaders = useCallback((): Record<string, string> => {
-    const token = tokenRef.current || readStoredToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
-  }, []);
-
-  const fetchOverview = useCallback(async () => {
+  const loadOverview = useCallback(async () => {
     setLoadingOverview(true);
     setOverviewError('');
     try {
-      const result = await safeFetchJson<OverviewResponse & { message?: string }>(
-        '/api/admin/overview',
-        {
-          cache: 'no-store',
-          headers: getAuthHeaders(),
-        },
-      );
-      if (result.status === 401) {
+      const data = await fetchAdminOverview(tokenRef.current);
+      setOverview(data);
+      onSurveyOpenChanged(data.config.surveyOpen);
+    } catch (err) {
+      if (err instanceof Error && err.message === 'UNAUTHORIZED') {
         tokenRef.current = null;
-        writeStoredToken(null);
+        setStoredAdminToken(null);
         setAuthState('unauthenticated');
         return;
       }
-      if (!result.ok || !result.data?.ok) {
-        throw new Error(
-          result.data?.message || result.errorMessage || 'Unable to load dashboard data.',
-        );
-      }
-      setOverview(result.data);
-      onSurveyOpenChanged(result.data.config.surveyOpen);
-    } catch (err) {
       setOverviewError(err instanceof Error ? err.message : 'Failed to load dashboard.');
     } finally {
       setLoadingOverview(false);
     }
-  }, [getAuthHeaders, onSurveyOpenChanged]);
+  }, [onSurveyOpenChanged]);
 
   useEffect(() => {
-    safeFetchJson<{ authenticated?: boolean }>('/api/admin/session', {
-      cache: 'no-store',
-      headers: getAuthHeaders(),
-    })
-      .then((result) => {
-        if (result.ok && result.data?.authenticated) {
+    checkAdminSession(tokenRef.current)
+      .then((authenticated) => {
+        if (authenticated) {
           setAuthState('authenticated');
-          fetchOverview();
+          loadOverview();
         } else {
           tokenRef.current = null;
-          writeStoredToken(null);
+          setStoredAdminToken(null);
           setAuthState('unauthenticated');
         }
       })
-      .catch(() => {
-        setAuthState('unauthenticated');
-      });
-  }, [fetchOverview, getAuthHeaders]);
+      .catch(() => setAuthState('unauthenticated'));
+  }, [loadOverview]);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
     setLoginError('');
     setLoggingIn(true);
     try {
-      const result = await safeFetchJson<{ ok?: boolean; token?: string; message?: string }>(
-        '/api/admin/login',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password: passwordInput }),
-        },
-      );
-      if (!result.ok || !result.data?.ok || !result.data.token) {
-        setLoginError(result.data?.message || result.errorMessage || 'Incorrect password.');
-        return;
-      }
-      tokenRef.current = result.data.token;
-      writeStoredToken(result.data.token);
+      const token = await adminLogin(passwordInput);
+      tokenRef.current = token;
       setPasswordInput('');
       setShowPassword(false);
       setAuthState('authenticated');
-      await fetchOverview();
-    } catch {
-      setLoginError('Network error during login.');
+      await loadOverview();
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : 'Incorrect password.');
     } finally {
       setLoggingIn(false);
     }
@@ -355,8 +301,7 @@ export function AdminDashboard({
 
   async function handleLogout() {
     tokenRef.current = null;
-    writeStoredToken(null);
-    await fetch('/api/admin/logout', { method: 'POST' }).catch(() => {});
+    await adminLogout();
     setOverview(null);
     setSelectedResponse(null);
     setAuthState('unauthenticated');
@@ -366,23 +311,7 @@ export function AdminDashboard({
     if (!overview) return;
     setTogglingOpen(true);
     try {
-      const result = await safeFetchJson<{ ok?: boolean; message?: string; config?: AdminConfig }>(
-        '/api/admin/config',
-        {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            ...getAuthHeaders(),
-          },
-          body: JSON.stringify({ surveyOpen: !overview.config.surveyOpen }),
-        },
-      );
-      if (!result.ok || !result.data?.ok || !result.data.config) {
-        throw new Error(
-          result.data?.message || result.errorMessage || 'Could not update survey status.',
-        );
-      }
-      const nextCfg = result.data.config;
+      const nextCfg = await toggleAdminSurveyOpen(tokenRef.current, !overview.config.surveyOpen);
       onSurveyOpenChanged(nextCfg.surveyOpen);
       setOverview((prev) => (prev ? { ...prev, config: nextCfg } : prev));
     } catch (err) {
@@ -395,21 +324,12 @@ export function AdminDashboard({
   async function handleDeleteResponse(submissionId: string) {
     setDeletingId(submissionId);
     try {
-      const result = await safeFetchJson<{ ok?: boolean; message?: string }>(
-        `/api/admin/responses/${encodeURIComponent(submissionId)}`,
-        {
-          method: 'DELETE',
-          headers: getAuthHeaders(),
-        },
-      );
-      if (!result.ok || !result.data?.ok) {
-        throw new Error(result.data?.message || result.errorMessage || 'Could not delete record.');
-      }
+      await deleteAdminResponse(tokenRef.current, submissionId);
       setPendingDeleteId(null);
       if (selectedResponse?.submissionId === submissionId) {
         setSelectedResponse(null);
       }
-      await fetchOverview();
+      await loadOverview();
     } catch (err) {
       setOverviewError(err instanceof Error ? err.message : 'Delete failed.');
     } finally {
@@ -420,19 +340,10 @@ export function AdminDashboard({
   async function handleClearAllResponses() {
     setClearingAll(true);
     try {
-      const result = await safeFetchJson<{ ok?: boolean; message?: string }>(
-        '/api/admin/responses',
-        {
-          method: 'DELETE',
-          headers: getAuthHeaders(),
-        },
-      );
-      if (!result.ok || !result.data?.ok) {
-        throw new Error(result.data?.message || result.errorMessage || 'Could not clear records.');
-      }
+      await clearAllAdminResponses(tokenRef.current);
       setConfirmClearAll(false);
       setSelectedResponse(null);
-      await fetchOverview();
+      await loadOverview();
     } catch (err) {
       setOverviewError(err instanceof Error ? err.message : 'Clear failed.');
     } finally {
@@ -443,19 +354,7 @@ export function AdminDashboard({
   async function handleExport(format: 'csv' | 'json') {
     setExportingFormat(format);
     try {
-      const res = await fetch(`/api/admin/export?format=${format}`, {
-        headers: getAuthHeaders(),
-      });
-      if (res.status === 401) {
-        tokenRef.current = null;
-        writeStoredToken(null);
-        setAuthState('unauthenticated');
-        return;
-      }
-      if (!res.ok) {
-        throw new Error(`Export failed (HTTP ${res.status})`);
-      }
-      const blob = await res.blob();
+      const blob = await exportAdminResponses(tokenRef.current, format);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -465,6 +364,12 @@ export function AdminDashboard({
       a.remove();
       URL.revokeObjectURL(url);
     } catch (err) {
+      if (err instanceof Error && err.message === 'UNAUTHORIZED') {
+        tokenRef.current = null;
+        setStoredAdminToken(null);
+        setAuthState('unauthenticated');
+        return;
+      }
       setOverviewError(err instanceof Error ? err.message : 'Export failed.');
     } finally {
       setExportingFormat(null);
@@ -615,7 +520,7 @@ export function AdminDashboard({
 
           <button
             type="button"
-            onClick={fetchOverview}
+            onClick={loadOverview}
             disabled={loadingOverview}
             className="inline-flex items-center gap-1.5 rounded-lg border border-[#dfd5e2] bg-white px-3.5 py-2 text-xs font-medium text-[#4e4558] whitespace-nowrap shrink-0 transition-colors hover:bg-[#faf6fa]"
           >

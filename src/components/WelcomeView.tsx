@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { ArrowRight, Flower2, ShieldCheck } from 'lucide-react';
+import botanicalHero from '../assets/images/survey_editorial_botanical_1795000009587.jpg';
 import { SURVEY_METADATA } from '../shared/surveySchema';
 
 interface WelcomeViewProps {
@@ -163,7 +164,7 @@ export function WelcomeView({
           <div className="overflow-hidden rounded-xl border border-[#efe7ef] bg-[#f8f1f5]">
             {!imageFailed ? (
               <img
-                src="/src/assets/images/survey_editorial_botanical_1795000009587.jpg"
+                src={botanicalHero}
                 alt="Botanical lavender and blush illustration representing women's health research"
                 referrerPolicy="no-referrer"
                 onError={() => setImageFailed(true)}
