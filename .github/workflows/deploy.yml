@@ -24,10 +24,16 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
 
       - name: Install dependencies
-        run: npm install
+        run: npm install --no-audit --no-fund
+
+      - name: Type check
+        run: npm run lint
 
       - name: Build website
         run: npm run build
